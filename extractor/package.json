@@ -1,0 +1,15 @@
+{
+  "name": "cheftap-extractor",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "index": "node index_recipes.mjs",
+    "extract": "node extract_recipes.mjs",
+    "images": "node download_images.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "dotenv": "^16.4.5"
+  }
+}

@@ -1,0 +1,17 @@
+node_modules/
+.env
+.env.local
+.cheftap-creds*
+recon/output/
+extractor/output/
+*.har
+*.log
+.DS_Store
+playwright-report/
+test-results/
+dist/
+.next/
+app/data/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

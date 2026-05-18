@@ -1,0 +1,40 @@
+app = "cheftap-import"
+primary_region = "iad"
+
+[build]
+
+[env]
+  PORT = "8080"
+  NODE_ENV = "production"
+  DB_PATH = "/data/app.sqlite"
+
+[[mounts]]
+  source = "cheftap_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [http_service.concurrency]
+    type = "requests"
+    soft_limit = 50
+    hard_limit = 200
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 2
+  memory_mb = 2048
+
+[checks]
+  [checks.health]
+    type = "http"
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "get"
+    path = "/healthz"

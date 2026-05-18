@@ -1,0 +1,13 @@
+{
+  "name": "cheftap-recon",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "login": "node login.mjs"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0",
+    "dotenv": "^16.4.5"
+  }
+}
