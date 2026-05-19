@@ -1,4 +1,5 @@
 import type { Page, BrowserContext } from 'playwright';
+import { withRetry } from '../retry.js';
 
 export type IndexedRecipe = { href: string; title: string; slug: string; thumb: string | null };
 
@@ -86,20 +87,34 @@ export function extractJsonRecipeFromHtml(html: string): unknown | null {
 }
 
 // Use the context's APIRequestContext to fetch the recipe page using the existing cookies.
+// Wraps the fetch+parse in retry logic that treats 429/5xx as transient.
 export async function fetchRecipeData(
   context: BrowserContext,
   url: string,
 ): Promise<{ payload: unknown; heroImage: string | null; wpPostId: number | null }> {
-  const resp = await context.request.get(url, { timeout: 30000 });
-  if (resp.status() !== 200) throw new Error(`HTTP ${resp.status()} fetching ${url}`);
-  const html = await resp.text();
-  const payload = extractJsonRecipeFromHtml(html);
-  if (!payload) throw new Error(`jsonRecipe not found in ${url}`);
-  const heroMatch = html.match(/id="recipe-hero"[^>]*src="([^"]+)"/);
-  const idMatch = html.match(/postid-(\d+)/);
-  return {
-    payload,
-    heroImage: heroMatch ? heroMatch[1] : null,
-    wpPostId: idMatch ? Number(idMatch[1]) : null,
-  };
+  return withRetry(
+    async () => {
+      const resp = await context.request.get(url, { timeout: 30000 });
+      const status = resp.status();
+      if (status !== 200) {
+        const err: any = new Error(`HTTP ${status} fetching ${url}`);
+        err.status = status;
+        // Surface Retry-After if cheftap ever sets it.
+        const headers = resp.headers();
+        if (headers['retry-after']) err.headers = { 'retry-after': headers['retry-after'] };
+        throw err;
+      }
+      const html = await resp.text();
+      const payload = extractJsonRecipeFromHtml(html);
+      if (!payload) throw new Error(`jsonRecipe not found in ${url}`);
+      const heroMatch = html.match(/id="recipe-hero"[^>]*src="([^"]+)"/);
+      const idMatch = html.match(/postid-(\d+)/);
+      return {
+        payload,
+        heroImage: heroMatch ? heroMatch[1] : null,
+        wpPostId: idMatch ? Number(idMatch[1]) : null,
+      };
+    },
+    { label: `cheftap-fetch ${url}`, log: (m) => console.log(m) },
+  );
 }

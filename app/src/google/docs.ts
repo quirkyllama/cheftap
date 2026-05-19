@@ -1,6 +1,7 @@
 // Build a Google Doc from a ChefTap recipe payload.
 import { google, docs_v1 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
+import { withRetry } from '../retry.js';
 
 // ---------- ChefTap payload shape (the bits we care about) ----------
 export type RecipeItem = {
@@ -191,10 +192,14 @@ export async function writeRecipeIntoDoc(
   const blocks = recipeToBlocks(recipe);
   const requests = buildRequests(blocks, opts.heroImageUrl ?? null);
   if (!requests.length) return;
-  await docs.documents.batchUpdate({
-    documentId,
-    requestBody: { requests },
-  });
+  await withRetry(
+    () =>
+      docs.documents.batchUpdate({
+        documentId,
+        requestBody: { requests },
+      }),
+    { label: 'docs.batchUpdate', log: (m) => console.log(m) },
+  );
 }
 
 export { recipeToBlocks, buildRequests };
