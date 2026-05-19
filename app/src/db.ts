@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS recipes (
 
 CREATE INDEX IF NOT EXISTS idx_recipes_user_status ON recipes(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_recipes_job ON recipes(job_id);
+
+CREATE TABLE IF NOT EXISTS sessions (
+  sid        TEXT PRIMARY KEY,
+  data       TEXT NOT NULL,
+  expires_at INTEGER,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
 `);
 
 // --- Migration: stabilize recipes.id to '<user_id>:<slug>' ----------------

@@ -11,6 +11,7 @@ import { encrypt, decrypt } from './crypto.js';
 import { authUrl, exchangeCode, upsertUserFromOAuth } from './google/oauth.js';
 import { layout, htmlMixed, esc, raw } from './views/layout.js';
 import { startJobForUser, cancelJob, getActiveJob, getLatestJob, getRecipeCounts } from './jobs.js';
+import { SqliteSessionStore } from './session_store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,6 +22,7 @@ await app.register(session, {
   secret: config.appKey,
   cookie: { secure: config.isProd, sameSite: 'lax', maxAge: 1000 * 60 * 60 * 24 * 30 },
   saveUninitialized: false,
+  store: new SqliteSessionStore() as any,
 });
 await app.register(formbody);
 await app.register(staticFiles, {
