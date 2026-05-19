@@ -28,6 +28,9 @@ export const config = {
   },
   dbPath: path.resolve(process.env.DB_PATH || './data/app.sqlite'),
   extractConcurrency: Number(process.env.EXTRACT_CONCURRENCY || 4),
-  uploadConcurrency: Number(process.env.UPLOAD_CONCURRENCY || 4),
+  uploadConcurrency: Number(process.env.UPLOAD_CONCURRENCY || 3),
+  // Stay safely under the Docs write-quota of 60/min/user (default). Each
+  // recipe issues 1 docs.documents.batchUpdate, so we cap at ~50/min.
+  docsWritesPerMinute: Number(process.env.DOCS_WRITES_PER_MINUTE || 50),
   isProd: process.env.NODE_ENV === 'production',
 };

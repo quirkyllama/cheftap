@@ -2,6 +2,12 @@
 import { google, docs_v1 } from 'googleapis';
 import type { OAuth2Client } from 'google-auth-library';
 import { withRetry } from '../retry.js';
+import { RateLimiter } from '../ratelimit.js';
+import { config } from '../config.js';
+
+// Module-level (process-wide) limiter so all concurrent upload workers share
+// one budget for docs.documents.batchUpdate writes.
+const docsWriteLimiter = new RateLimiter(config.docsWritesPerMinute, 60_000, 'docs.write');
 
 // ---------- ChefTap payload shape (the bits we care about) ----------
 export type RecipeItem = {
@@ -193,12 +199,20 @@ export async function writeRecipeIntoDoc(
   const requests = buildRequests(blocks, opts.heroImageUrl ?? null);
   if (!requests.length) return;
   await withRetry(
-    () =>
-      docs.documents.batchUpdate({
+    async () => {
+      await docsWriteLimiter.acquire();
+      return docs.documents.batchUpdate({
         documentId,
         requestBody: { requests },
-      }),
-    { label: 'docs.batchUpdate', log: (m) => console.log(m) },
+      });
+    },
+    {
+      label: 'docs.batchUpdate',
+      log: (m) => console.log(m),
+      maxAttempts: 6,
+      baseMs: 2000,
+      maxMs: 90_000,
+    },
   );
 }
 
