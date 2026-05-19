@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-bookworm-slim AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json tsconfig.json ./
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ && rm -rf /var/lib/apt/lists/*
@@ -8,7 +8,7 @@ COPY src ./src
 RUN npx tsc -p . && npm prune --omit=dev
 
 # Runtime stage: Playwright official image already has Chromium and all OS deps.
-FROM mcr.microsoft.com/playwright:v1.48.0-jammy
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
