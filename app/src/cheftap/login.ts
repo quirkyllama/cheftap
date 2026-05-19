@@ -12,10 +12,21 @@ export async function loginCheftap(
   });
   await page.locator('input[name="log"]').fill(username);
   await page.locator('input[name="pwd"]').fill(password);
-  await Promise.all([
-    page.waitForLoadState('networkidle'),
-    page.locator('input[name="wp-submit"]').click(),
-  ]);
+  await page.locator('input[name="wp-submit"]').click();
+
+  // Wait for either a logged-in URL or an explicit login error to appear.
+  // Using waitForLoadState('networkidle') alone returns immediately because the
+  // login page itself is already idle at click time.
+  try {
+    await Promise.race([
+      page.waitForURL(/\/members\//, { timeout: 30000 }),
+      page.waitForSelector('#login_error, .login-error', { timeout: 30000 }),
+    ]);
+  } catch {
+    // fall through to the URL/error check below
+  }
+  await page.waitForLoadState('networkidle').catch(() => {});
+
   if (!/\/members\//.test(page.url())) {
     const errText = await page
       .locator('#login_error, .login-error, body')
