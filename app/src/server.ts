@@ -10,7 +10,14 @@ import { db, now, type UserRow, type JobRow, type RecipeRow } from './db.js';
 import { encrypt, decrypt } from './crypto.js';
 import { authUrl, exchangeCode, upsertUserFromOAuth } from './google/oauth.js';
 import { layout, htmlMixed, esc, raw } from './views/layout.js';
-import { startJobForUser, cancelJob, getActiveJob, getLatestJob, getRecipeCounts } from './jobs.js';
+import {
+  startJobForUser,
+  startRewriteJob,
+  cancelJob,
+  getActiveJob,
+  getLatestJob,
+  getRecipeCounts,
+} from './jobs.js';
 import { SqliteSessionStore } from './session_store.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -119,6 +126,13 @@ app.get('/', async (req, reply) => {
         <form method="post" action="/jobs/start"><button class="btn" type="submit">${cached.total > 0 ? raw('Resume import') : raw('Start import')}</button></form>
         <p style="margin-top:16px">
           ${
+            cached.uploaded > 0
+              ? raw(
+                  `<form method="post" action="/jobs/rewrite" style="display:inline; margin-right:8px" onsubmit="return confirm('Rewrite all ${cached.uploaded} uploaded Google Docs in place? Each doc keeps its URL but its body is replaced.')"><button type="submit" class="btn secondary">Rewrite ${cached.uploaded} Google Docs</button></form>`,
+                )
+              : ''
+          }
+          ${
             cached.total > 0
               ? raw(
                   `<form method="post" action="/cheftap/cache/clear" style="display:inline" onsubmit="return confirm('Delete ${cached.total} cached recipes from this app? (Existing Google Docs in your Drive are not affected.)')"><button type="submit" class="btn secondary">Clear cached recipes</button></form>`,
@@ -222,6 +236,18 @@ app.post('/jobs/start', async (req, reply) => {
   reply.redirect('/progress');
 });
 
+app.post('/jobs/rewrite', async (req, reply) => {
+  const user = currentUser(req as any);
+  if (!user) return reply.redirect('/');
+  try {
+    startRewriteJob(user.id);
+  } catch (e: any) {
+    flash(req, 'err', e?.message || 'Could not start rewrite');
+    return reply.redirect('/');
+  }
+  reply.redirect('/progress');
+});
+
 app.post('/jobs/cancel', async (req, reply) => {
   const user = currentUser(req as any);
   if (!user) return reply.redirect('/');
@@ -271,6 +297,7 @@ function renderProgress(userId: string, fullPage: boolean): string {
     indexing: 'Indexing recipes…',
     extracting: 'Extracting recipes…',
     uploading: 'Creating Google Docs…',
+    rewriting: 'Rewriting Google Docs…',
     done: 'Done',
     error: 'Error',
     canceled: 'Canceled',

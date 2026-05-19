@@ -48,6 +48,40 @@ function updateJob(id: string, patch: Partial<JobRow>) {
   db.prepare(`UPDATE jobs SET ${sets}, updated_at = ? WHERE id = ?`).run(...values, now(), id);
 }
 
+export function startRewriteJob(userId: string): JobRow {
+  const existing = getActiveJob(userId);
+  if (existing) return existing;
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId) as UserRow | undefined;
+  if (!user) throw new Error('Unknown user');
+  const candidates = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM recipes
+        WHERE user_id=? AND status='uploaded' AND drive_file_id IS NOT NULL`,
+    )
+    .get(userId) as { c: number };
+  if (!candidates.c) throw new Error('No uploaded recipes to rewrite.');
+
+  const t = now();
+  const id = nanoid(12);
+  db.prepare(
+    `INSERT INTO jobs (id, user_id, status, message, total_recipes, created_at, updated_at)
+       VALUES (?, ?, 'rewriting', 'Rewriting Google Docs...', ?, ?, ?)`,
+  ).run(id, userId, candidates.c, t, t);
+
+  const controller = new AbortController();
+  inflight.set(id, controller);
+  runRewriteJob(id, userId, controller.signal).catch((e) => {
+    console.error('[rewrite job error]', id, e);
+    updateJob(id, {
+      status: 'error',
+      message: String(e?.message || e).slice(0, 500),
+      finished_at: now(),
+    });
+    inflight.delete(id);
+  });
+  return db.prepare('SELECT * FROM jobs WHERE id = ?').get(id) as JobRow;
+}
+
 export function startJobForUser(userId: string): JobRow {
   const existing = getActiveJob(userId);
   if (existing) return existing;
@@ -88,6 +122,62 @@ export function cancelJob(jobId: string) {
     updateJob(jobId, { status: 'canceled', message: 'Canceled', finished_at: now() });
     inflight.delete(jobId);
   }
+}
+
+async function runRewriteJob(jobId: string, userId: string, signal: AbortSignal) {
+  updateJob(jobId, { started_at: now() });
+  const auth = userOauthClient(userId);
+
+  const targets = db
+    .prepare(
+      `SELECT * FROM recipes
+        WHERE user_id=? AND status='uploaded' AND drive_file_id IS NOT NULL
+        ORDER BY updated_at DESC`,
+    )
+    .all(userId) as RecipeRow[];
+
+  let done = 0;
+  const queue = targets.slice();
+  async function worker() {
+    while (queue.length) {
+      if (signal.aborted) return;
+      const r = queue.shift();
+      if (!r) return;
+      try {
+        const recipe = JSON.parse(r.payload || '{}') as CheftapRecipe;
+        await writeRecipeIntoDoc(auth, r.drive_file_id!, recipe, {
+          heroImageUrl: r.hero_image_url,
+          docUrl: r.drive_web_link || `https://docs.google.com/document/d/${r.drive_file_id}/edit`,
+          replaceExisting: true,
+        });
+        db.prepare('UPDATE recipes SET updated_at=? WHERE id=?').run(now(), r.id);
+        done++;
+        if (done % 5 === 0) updateJob(jobId, { uploaded_count: done });
+      } catch (e: any) {
+        db.prepare('UPDATE recipes SET error=?, updated_at=? WHERE id=?').run(
+          String(e?.message || e).slice(0, 500),
+          now(),
+          r.id,
+        );
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: config.uploadConcurrency }, worker));
+
+  const errCount = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM recipes WHERE user_id=? AND status='uploaded' AND error IS NOT NULL`,
+    )
+    .get(userId) as { c: number };
+
+  updateJob(jobId, {
+    status: 'done',
+    uploaded_count: done,
+    error_count: errCount.c,
+    message: `Rewrote ${done} of ${targets.length} Google Docs.`,
+    finished_at: now(),
+  });
+  inflight.delete(jobId);
 }
 
 async function runJob(

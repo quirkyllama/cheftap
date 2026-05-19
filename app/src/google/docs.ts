@@ -198,14 +198,43 @@ export async function writeRecipeIntoDoc(
   auth: OAuth2Client,
   documentId: string,
   recipe: CheftapRecipe,
-  opts: { heroImageUrl?: string | null; docUrl?: string | null } = {},
+  opts: {
+    heroImageUrl?: string | null;
+    docUrl?: string | null;
+    /** If true, clear the doc's existing body before writing. Used by rewrite. */
+    replaceExisting?: boolean;
+  } = {},
 ): Promise<void> {
   const docs = google.docs({ version: 'v1', auth });
   const docUrl =
     opts.docUrl ?? `https://docs.google.com/document/d/${documentId}/edit`;
   const blocks = recipeToBlocks(recipe, { docUrl });
-  const requests = buildRequests(blocks, opts.heroImageUrl ?? null);
+  const insertRequests = buildRequests(blocks, opts.heroImageUrl ?? null);
+  const requests: docs_v1.Schema$Request[] = [];
+
+  if (opts.replaceExisting) {
+    // Find the doc's current end-of-body. We can't delete the final newline,
+    // so the deletable range is [1, endIndex - 1).
+    const current = await withRetry(
+      () =>
+        docs.documents.get({
+          documentId,
+          fields: 'body(content(endIndex))',
+        }),
+      { label: 'docs.get', log: (m) => console.log(m), maxAttempts: 6, baseMs: 1500, maxMs: 60_000 },
+    );
+    const content = current.data.body?.content || [];
+    const lastEnd = content.length ? content[content.length - 1]!.endIndex ?? 1 : 1;
+    if (lastEnd > 2) {
+      requests.push({
+        deleteContentRange: { range: { startIndex: 1, endIndex: lastEnd - 1 } },
+      });
+    }
+  }
+
+  requests.push(...insertRequests);
   if (!requests.length) return;
+
   await withRetry(
     async () => {
       await docsWriteLimiter.acquire();
@@ -215,7 +244,7 @@ export async function writeRecipeIntoDoc(
       });
     },
     {
-      label: 'docs.batchUpdate',
+      label: opts.replaceExisting ? 'docs.batchUpdate(rewrite)' : 'docs.batchUpdate',
       log: (m) => console.log(m),
       maxAttempts: 6,
       baseMs: 2000,
