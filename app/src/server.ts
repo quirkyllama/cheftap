@@ -92,12 +92,38 @@ app.get('/', async (req, reply) => {
         </form>
       </div>`;
   } else {
+    const cached = db
+      .prepare(
+        `SELECT
+           COALESCE(SUM(status='extracted'),0) AS extracted,
+           COALESCE(SUM(status='uploaded'),0)  AS uploaded,
+           COALESCE(SUM(status='pending'),0)   AS pending,
+           COUNT(*) AS total
+         FROM recipes WHERE user_id = ?`,
+      )
+      .get(user.id) as { extracted: number; uploaded: number; pending: number; total: number };
     body = htmlMixed`
       ${flashMsg ? raw(`<div class="banner ${flashMsg.type}">${esc(flashMsg.text)}</div>`) : ''}
       <div class="card">
         <h1>Ready to import</h1>
         <p class="muted">Your ChefTap credentials are saved.</p>
-        <form method="post" action="/jobs/start"><button class="btn" type="submit">Start import</button></form>
+        ${
+          cached.total > 0
+            ? raw(
+                `<p class="muted"><strong>${cached.total}</strong> cached recipes (${cached.uploaded} uploaded, ${cached.extracted} extracted, ${cached.pending} pending). A new import will skip recipes already extracted.</p>`,
+              )
+            : ''
+        }
+        <form method="post" action="/jobs/start"><button class="btn" type="submit">${cached.total > 0 ? raw('Resume import') : raw('Start import')}</button></form>
+        <p style="margin-top:16px">
+          ${
+            cached.total > 0
+              ? raw(
+                  `<form method="post" action="/cheftap/cache/clear" style="display:inline" onsubmit="return confirm('Delete ${cached.total} cached recipes from this app? (Existing Google Docs in your Drive are not affected.)')"><button type="submit" class="btn secondary">Clear cached recipes</button></form>`,
+                )
+              : ''
+          }
+        </p>
         <p><a class="muted" href="/cheftap/disconnect" onclick="return confirm('Remove your stored ChefTap credentials?')">Remove ChefTap credentials</a></p>
       </div>
       ${
@@ -167,6 +193,17 @@ app.get('/cheftap/disconnect', async (req, reply) => {
   if (!user) return reply.redirect('/');
   db.prepare('DELETE FROM cheftap_creds WHERE user_id = ?').run(user.id);
   flash(req, 'ok', 'ChefTap credentials removed.');
+  reply.redirect('/');
+});
+
+app.post('/cheftap/cache/clear', async (req, reply) => {
+  const user = currentUser(req as any);
+  if (!user) return reply.redirect('/');
+  // Cancel any in-flight job first so it doesn't keep writing rows back.
+  const job = getActiveJob(user.id);
+  if (job) cancelJob(job.id);
+  const result = db.prepare('DELETE FROM recipes WHERE user_id = ?').run(user.id);
+  flash(req, 'ok', `Cleared ${result.changes} cached recipes.`);
   reply.redirect('/');
 });
 

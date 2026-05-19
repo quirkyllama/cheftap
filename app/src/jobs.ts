@@ -108,24 +108,51 @@ async function runJob(
     updateJob(jobId, { total_recipes: list.length, message: `Indexed ${list.length} recipes.` });
 
     // Pre-populate the recipes table as pending so we can show progress.
+    // id = '<user_id>:<slug>' so it's stable across re-runs and the same
+    // INSERT OR IGNORE skips already-known recipes for this user.
     const insertStmt = db.prepare(
-      `INSERT OR IGNORE INTO recipes
+      `INSERT INTO recipes
          (id, user_id, job_id, slug, title, cheftap_url, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+         ON CONFLICT(user_id, slug) DO UPDATE SET
+           job_id = excluded.job_id,
+           title = COALESCE(NULLIF(excluded.title, ''), recipes.title),
+           cheftap_url = excluded.cheftap_url,
+           updated_at = excluded.updated_at`,
     );
     const t0 = now();
     db.transaction(() => {
       for (const r of list) {
-        insertStmt.run(r.slug || r.href, userId, jobId, r.slug, r.title, r.href, t0, t0);
+        const slug = r.slug || r.href;
+        insertStmt.run(`${userId}:${slug}`, userId, jobId, slug, r.title, r.href, t0, t0);
       }
     })();
 
     checkAbort();
     updateJob(jobId, { status: 'extracting', message: 'Extracting recipe details...' });
 
-    let extracted = 0;
+    // Skip recipes already extracted or uploaded (resume / re-run support).
+    const alreadyDone = new Set(
+      (
+        db
+          .prepare(
+            `SELECT cheftap_url FROM recipes WHERE user_id=? AND status IN ('extracted','uploaded')`,
+          )
+          .all(userId) as { cheftap_url: string }[]
+      ).map((r) => r.cheftap_url),
+    );
+
+    let extracted = alreadyDone.size;
+    updateJob(jobId, {
+      extracted_count: extracted,
+      message:
+        alreadyDone.size > 0
+          ? `Resuming: ${alreadyDone.size} recipes already extracted; fetching the rest.`
+          : 'Extracting recipe details...',
+    });
+
     const concurrency = config.extractConcurrency;
-    const queue = list.slice();
+    const queue = list.filter((item) => !alreadyDone.has(item.href));
     async function extractWorker() {
       while (queue.length) {
         if (signal.aborted) return;
@@ -134,14 +161,14 @@ async function runJob(
         try {
           const data = await fetchRecipeData(context, item.href);
           const payload = data.payload as CheftapRecipe;
-          const recipeId = payload?.id || item.slug || nanoid();
+          // NOTE: we no longer mutate `recipes.id` here. The cheftap recipe
+          // UUID is already preserved inside `payload`.
           db.prepare(
             `UPDATE recipes
-               SET id=?, title=?, source_url=?, payload=?, hero_image_url=?,
+               SET title=?, source_url=?, payload=?, hero_image_url=?,
                    status='extracted', updated_at=?
              WHERE user_id=? AND cheftap_url=?`,
           ).run(
-            recipeId,
             payload?.title ?? item.title,
             payload?.sourceURL ?? null,
             JSON.stringify(payload),

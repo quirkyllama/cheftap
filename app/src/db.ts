@@ -68,6 +68,46 @@ CREATE INDEX IF NOT EXISTS idx_recipes_user_status ON recipes(user_id, status);
 CREATE INDEX IF NOT EXISTS idx_recipes_job ON recipes(job_id);
 `);
 
+// --- Migration: stabilize recipes.id to '<user_id>:<slug>' ----------------
+// Earlier code rewrote `recipes.id` from the slug to the cheftap UUID during
+// extraction. On re-runs this produced two rows per recipe (id=slug from the
+// new pre-populate + id=UUID from the prior run) and the second extract's
+// UPDATE then violated the PRIMARY KEY. We now use a stable per-user id.
+db.exec(`
+  -- Dedupe by (user_id, slug), keeping the most recent row.
+  DELETE FROM recipes
+    WHERE rowid NOT IN (
+      SELECT MAX(rowid)
+        FROM recipes
+       WHERE slug IS NOT NULL AND user_id IS NOT NULL
+       GROUP BY user_id, slug
+    )
+    AND slug IS NOT NULL;
+
+  -- Re-key any non-conforming ids to '<user_id>:<slug>'.
+  UPDATE recipes
+     SET id = user_id || ':' || slug
+   WHERE slug IS NOT NULL
+     AND id <> user_id || ':' || slug;
+
+  -- Belt-and-suspenders uniqueness on the natural key.
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_recipes_user_slug
+    ON recipes(user_id, slug);
+`);
+
+// --- Startup recovery -----------------------------------------------------
+// Any job left mid-flight by a previous process (deploy / crash / SIGKILL)
+// is now a zombie -- no in-memory worker is running. Mark them canceled so
+// a fresh job can start.
+db.prepare(
+  `UPDATE jobs
+      SET status='canceled',
+          message=COALESCE(message,'') || ' [process restarted before job finished]',
+          finished_at=?,
+          updated_at=?
+    WHERE status NOT IN ('done','error','canceled')`,
+).run(Date.now(), Date.now());
+
 export const now = () => Date.now();
 
 export type UserRow = {
