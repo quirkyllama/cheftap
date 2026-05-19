@@ -212,7 +212,11 @@ async function runJob(
           const recipe: CheftapRecipe = JSON.parse(r.payload || '{}');
           const title = recipe.title?.trim() || r.title || 'Untitled recipe';
           const { id: fileId, webViewLink } = await createDocInFolder(auth, folderId, title);
-          await writeRecipeIntoDoc(auth, fileId, recipe, { heroImageUrl: r.hero_image_url });
+          // Pass the document URL so it gets embedded at the bottom of the doc.
+          await writeRecipeIntoDoc(auth, fileId, recipe, {
+            heroImageUrl: r.hero_image_url,
+            docUrl: webViewLink ?? `https://docs.google.com/document/d/${fileId}/edit`,
+          });
           db.prepare(
             `UPDATE recipes SET status='uploaded', drive_file_id=?, drive_web_link=?, updated_at=?
                WHERE id=?`,
